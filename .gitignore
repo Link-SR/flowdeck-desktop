@@ -1,0 +1,12 @@
+node_modules
+dist
+release
+src-tauri/target
+src-tauri/gen
+.toolchains
+.DS_Store
+*.local
+*.log
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
