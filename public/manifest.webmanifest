@@ -1,0 +1,10 @@
+{
+  "name": "Flowdeck · 个人工作台",
+  "short_name": "Flowdeck",
+  "description": "极简的个人日常工作管理系统",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8f9fb",
+  "theme_color": "#f8f9fb",
+  "lang": "zh-CN"
+}
