@@ -1,6 +1,6 @@
 [package]
 name = "flowdeck"
-version = "0.2.0"
+version = "0.2.1"
 description = "A calm, focused personal workbench for tasks, projects and notes"
 authors = ["Flowdeck"]
 edition = "2021"

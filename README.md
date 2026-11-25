@@ -67,7 +67,7 @@ pnpm desktop:build:dmg
 
 构建产物位于 `src-tauri/target/release/bundle/`。项目同时包含 `.github/workflows/build-desktop.yml`，推送 `v*` 标签或手动运行工作流即可生成 macOS 与 Windows 安装包。
 
-当前发布版本为 `0.2.0`。Windows 构建会生成 x64 NSIS `-setup.exe` 和 MSI 安装包；个人测试版本未购买代码签名证书，因此首次安装时 Windows 可能显示 SmartScreen 提示。
+当前发布版本为 `0.2.1`。Windows 构建会生成 x64 NSIS `-setup.exe` 和 MSI 安装包；个人测试版本未购买代码签名证书，因此首次安装时 Windows 可能显示 SmartScreen 提示。
 
 桌面应用图标由 `app-icon.svg` 派生；需要重新生成时，可运行 `scripts/generate-icons.mjs`，再使用系统图标工具生成对应格式。
 
