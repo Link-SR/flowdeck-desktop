@@ -5,8 +5,9 @@ const day = (offset: number) => format(addDays(new Date(), offset), 'yyyy-MM-dd'
 const stamp = (offset = 0) => subDays(new Date(), offset).toISOString()
 
 export const seedData: WorkspaceData = {
-  version: 3,
-  deleted: { tasks: {}, projects: {}, notes: {} },
+  version: 4,
+  deleted: { tasks: {}, projects: {}, notes: {}, attachments: {} },
+  attachments: [],
   projects: [
     { id: 'project-launch', name: '产品发布', description: '准备个人工作台第一阶段发布与反馈收集', color: '#3b82f6', status: 'active', createdAt: stamp(14), updatedAt: stamp() },
     { id: 'project-growth', name: '内容增长', description: '建立稳定的内容策划与发布节奏', color: '#8b5cf6', status: 'active', createdAt: stamp(30), updatedAt: stamp(2) },

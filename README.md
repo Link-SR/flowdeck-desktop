@@ -80,6 +80,7 @@ pnpm desktop:build:dmg
 - 右侧任务详情抽屉与轻量新增弹窗
 - 项目 CRUD、项目任务与完成进度
 - Markdown 笔记 CRUD、编辑 / 预览与项目关联
+- 笔记图片与常用办公文档附件、拖拽 / 粘贴添加、正文插图与系统打开
 - 已完成、取消和已归档内容的查看与恢复
 - localStorage 持久化和首次启动演示数据
 - macOS / Windows OneDrive 自动发现、旧数据迁移和本地安全备份
@@ -92,7 +93,7 @@ pnpm desktop:build:dmg
 
 ## 架构说明
 
-`src/services/workspaceRepository.ts` 负责数据升级、设备快照合并和浏览器回退；`src-tauri/src/lib.rs` 负责发现 OneDrive、原子写入快照及本地备份。桌面版默认使用 OneDrive 根目录下的 `Flowdeck Sync/devices`，每台设备只写自己的快照文件。
+`src/services/workspaceRepository.ts` 负责数据升级、设备快照合并和浏览器回退；`src-tauri/src/lib.rs` 负责发现 OneDrive、原子写入快照、本地备份与附件缓存。桌面版默认使用 OneDrive 根目录下的 `Flowdeck Sync/devices` 保存设备快照，并在 `Flowdeck Sync/attachments` 中独立同步附件二进制。
 
 ## OneDrive 同步
 

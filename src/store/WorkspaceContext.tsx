@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { mergeWorkspaces, workspaceRepository, workspaceSignature } from '../services/workspaceRepository'
-import type { Note, NoteInput, Project, ProjectInput, SyncStatus, Task, TaskInput, TaskStatus, WorkspaceData } from '../types'
+import type { Attachment, Note, NoteInput, Project, ProjectInput, SyncStatus, Task, TaskInput, TaskStatus, WorkspaceData } from '../types'
 import { createId, todayKey } from '../lib/utils'
 
 export type SyncPhase = 'loading' | 'syncing' | 'synced' | 'offline' | 'error'
@@ -19,9 +19,11 @@ interface WorkspaceActions {
   createProject(input: ProjectInput): Project
   updateProject(id: string, patch: Partial<Project>): void
   deleteProject(id: string): void
-  createNote(input: NoteInput): Note
+  createNote(input: NoteInput, id?: string): Note
   updateNote(id: string, patch: Partial<Note>): void
   deleteNote(id: string): void
+  addAttachments(items: Attachment[]): void
+  deleteAttachments(ids: string[]): void
 }
 
 const initialSyncStatus: SyncStatus = {
@@ -198,9 +200,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         deleted: { ...current.deleted, projects: { ...current.deleted.projects, [id]: deletedAt } },
       }))
     },
-    createNote(input) {
+    createNote(input, id) {
       const now = new Date().toISOString()
-      const note: Note = { id: createId('note'), ...input, title: input.title.trim(), createdAt: now, updatedAt: now, archived: false }
+      const note: Note = { id: id ?? createId('note'), ...input, title: input.title.trim(), createdAt: now, updatedAt: now, archived: false }
       setData(current => ({ ...current, notes: [note, ...current.notes] }))
       return note
     },
@@ -212,7 +214,31 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setData(current => ({
         ...current,
         notes: current.notes.filter(note => note.id !== id),
-        deleted: { ...current.deleted, notes: { ...current.deleted.notes, [id]: deletedAt } },
+        attachments: current.attachments.filter(attachment => attachment.noteId !== id),
+        deleted: {
+          ...current.deleted,
+          notes: { ...current.deleted.notes, [id]: deletedAt },
+          attachments: current.attachments
+            .filter(attachment => attachment.noteId === id)
+            .reduce((deleted, attachment) => ({ ...deleted, [attachment.id]: deletedAt }), current.deleted.attachments),
+        },
+      }))
+    },
+    addAttachments(items) {
+      if (!items.length) return
+      setData(current => ({ ...current, attachments: [...items, ...current.attachments] }))
+    },
+    deleteAttachments(ids) {
+      if (!ids.length) return
+      const deletedAt = new Date().toISOString()
+      const selectedIds = new Set(ids)
+      setData(current => ({
+        ...current,
+        attachments: current.attachments.filter(attachment => !selectedIds.has(attachment.id)),
+        deleted: {
+          ...current.deleted,
+          attachments: ids.reduce((deleted, id) => ({ ...deleted, [id]: deletedAt }), current.deleted.attachments),
+        },
       }))
     },
   }), [data, redetectSyncDirectory, syncError, syncPhase, syncStatus])

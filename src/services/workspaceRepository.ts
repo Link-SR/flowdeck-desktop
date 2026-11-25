@@ -1,5 +1,5 @@
 import { seedData } from '../data/seed'
-import type { Note, Project, SyncStatus, Task, WorkspaceData } from '../types'
+import type { Attachment, Note, Project, SyncStatus, Task, WorkspaceData } from '../types'
 
 const STORAGE_KEY = 'flowdeck-workspace-v1'
 const MIGRATION_BACKUP_KEY = 'flowdeck-workspace-v1-migration-backup'
@@ -23,6 +23,7 @@ const emptyDeleted = () => ({
   tasks: {} as Record<string, string>,
   projects: {} as Record<string, string>,
   notes: {} as Record<string, string>,
+  attachments: {} as Record<string, string>,
 })
 
 function validTombstones(value: unknown): Record<string, string> {
@@ -38,14 +39,16 @@ export function normalizeWorkspace(value: unknown): WorkspaceData | null {
   if (!Array.isArray(data.tasks) || !Array.isArray(data.projects) || !Array.isArray(data.notes)) return null
 
   return {
-    version: 3,
+    version: 4,
     tasks: data.tasks.map(task => ({ ...task, scheduledDate: task.scheduledDate ?? null })),
     projects: data.projects,
     notes: data.notes,
+    attachments: Array.isArray(data.attachments) ? data.attachments : [],
     deleted: {
       tasks: validTombstones(data.deleted?.tasks),
       projects: validTombstones(data.deleted?.projects),
       notes: validTombstones(data.deleted?.notes),
+      attachments: validTombstones(data.deleted?.attachments),
     },
   }
 }
@@ -53,7 +56,7 @@ export function normalizeWorkspace(value: unknown): WorkspaceData | null {
 function mergeTombstones(sources: WorkspaceData[]) {
   const deleted = emptyDeleted()
   for (const source of sources) {
-    for (const kind of ['tasks', 'projects', 'notes'] as const) {
+    for (const kind of ['tasks', 'projects', 'notes', 'attachments'] as const) {
       for (const [id, timestamp] of Object.entries(source.deleted[kind])) {
         if (!deleted[kind][id] || timestamp > deleted[kind][id]) deleted[kind][id] = timestamp
       }
@@ -89,11 +92,12 @@ export function mergeWorkspaces(...values: WorkspaceData[]): WorkspaceData {
 
   const deleted = mergeTombstones(sources)
   return {
-    version: 3,
+    version: 4,
     deleted,
     tasks: mergeCollection<Task>(sources.map(source => source.tasks), deleted.tasks),
     projects: mergeCollection<Project>(sources.map(source => source.projects), deleted.projects),
     notes: mergeCollection<Note>(sources.map(source => source.notes), deleted.notes),
+    attachments: mergeCollection<Attachment>(sources.map(source => source.attachments), deleted.attachments),
   }
 }
 

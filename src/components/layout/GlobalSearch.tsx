@@ -20,7 +20,10 @@ export function GlobalSearch() {
   const results = useMemo(() => ({
     tasks: data.tasks.filter(item => !item.archived && `${item.title} ${item.description}`.toLowerCase().includes(q)).slice(0, 5),
     projects: data.projects.filter(item => `${item.name} ${item.description}`.toLowerCase().includes(q)).slice(0, 4),
-    notes: data.notes.filter(item => !item.archived && `${item.title} ${item.content}`.toLowerCase().includes(q)).slice(0, 4),
+    notes: data.notes.filter(item => {
+      const attachmentNames = data.attachments.filter(attachment => attachment.noteId === item.id).map(attachment => attachment.name).join(' ')
+      return !item.archived && `${item.title} ${item.content} ${attachmentNames}`.toLowerCase().includes(q)
+    }).slice(0, 4),
   }), [data, q])
   const hasResults = results.tasks.length + results.projects.length + results.notes.length > 0
 

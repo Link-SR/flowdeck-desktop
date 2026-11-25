@@ -1,4 +1,4 @@
-import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
+import { forwardRef, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 import { cn } from '../../lib/utils'
 
 export function FormField({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
@@ -9,9 +9,9 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
   return <input className={cn('focus-ring h-10 w-full rounded-lg border bg-white px-3 text-sm text-slate-800 placeholder:text-slate-400', className)} {...props} />
 }
 
-export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea className={cn('focus-ring min-h-24 w-full resize-y rounded-lg border bg-white px-3 py-2.5 text-sm leading-6 text-slate-800 placeholder:text-slate-400', className)} {...props} />
-}
+export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(function Textarea({ className, ...props }, ref) {
+  return <textarea ref={ref} className={cn('focus-ring min-h-24 w-full resize-y rounded-lg border bg-white px-3 py-2.5 text-sm leading-6 text-slate-800 placeholder:text-slate-400', className)} {...props} />
+})
 
 export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
   return <select className={cn('focus-ring h-10 w-full rounded-lg border bg-white px-3 text-sm text-slate-700', className)} {...props} />

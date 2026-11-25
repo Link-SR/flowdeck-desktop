@@ -36,15 +36,30 @@ export interface Note {
   archived: boolean
 }
 
+export type AttachmentKind = 'image' | 'document'
+
+export interface Attachment {
+  id: string
+  noteId: string
+  name: string
+  mimeType: string
+  size: number
+  kind: AttachmentKind
+  createdAt: string
+  updatedAt: string
+}
+
 export interface WorkspaceData {
   tasks: Task[]
   projects: Project[]
   notes: Note[]
+  attachments: Attachment[]
   version: number
   deleted: {
     tasks: Record<string, string>
     projects: Record<string, string>
     notes: Record<string, string>
+    attachments: Record<string, string>
   }
 }
 

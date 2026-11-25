@@ -7,9 +7,16 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
+use tauri_plugin_opener::OpenerExt;
 
 const SYNC_FOLDER_NAME: &str = "Flowdeck Sync";
 const LOCAL_SYNC_FOLDER_NAME: &str = "Flowdeck Sync Local";
+const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
+const ATTACHMENT_ID_HEADER: &str = "x-flowdeck-attachment-id";
+const ALLOWED_ATTACHMENT_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "gif", "pdf", "doc", "docx", "xls", "xlsx", "csv",
+    "ppt", "pptx", "txt", "md", "markdown",
+];
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +37,13 @@ struct SyncPayload {
 #[derive(Deserialize, Serialize)]
 struct SyncConfig {
     directory: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingAttachment {
+    name: String,
+    size: usize,
 }
 
 fn millis_since_epoch(time: SystemTime) -> Option<u64> {
@@ -191,7 +205,8 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("无法创建数据目录：{error}"))?;
     }
-    let temporary = path.with_extension("json.tmp");
+    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("flowdeck");
+    let temporary = path.with_file_name(format!(".{file_name}.tmp"));
     let mut file = fs::File::create(&temporary).map_err(|error| format!("无法创建临时数据文件：{error}"))?;
     file.write_all(contents)
         .and_then(|_| file.sync_all())
@@ -203,6 +218,202 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
     }
 
     fs::rename(&temporary, path).map_err(|error| format!("无法提交数据文件：{error}"))
+}
+
+fn valid_attachment_id(id: &str) -> bool {
+    id.starts_with("attachment-")
+        && id.len() <= 96
+        && id.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+fn validate_attachment_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.len() > 240 {
+        return Err("附件名称为空或过长。".to_string());
+    }
+    let path = Path::new(trimmed);
+    if path.components().count() != 1 || path.file_name().and_then(|value| value.to_str()) != Some(trimmed) {
+        return Err("附件名称不合法。".to_string());
+    }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| "该文件没有受支持的扩展名。".to_string())?;
+    if !ALLOWED_ATTACHMENT_EXTENSIONS.contains(&extension.as_str()) {
+        return Err("不支持该附件类型。".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn attachment_cache_root(app_data: &Path) -> PathBuf {
+    app_data.join("attachments")
+}
+
+fn attachment_staging_path(app_data: &Path, id: &str) -> PathBuf {
+    app_data.join("attachment-staging").join(format!("{id}.json"))
+}
+
+fn cached_attachment_path(app_data: &Path, id: &str, name: &str) -> PathBuf {
+    attachment_cache_root(app_data).join(id).join(name)
+}
+
+fn shared_attachment_path(sync_root: &Path, id: &str) -> PathBuf {
+    sync_root.join("attachments").join(id)
+}
+
+fn ensure_cached_attachment(app: &tauri::AppHandle, id: &str, name: &str) -> Result<PathBuf, String> {
+    if !valid_attachment_id(id) {
+        return Err("附件标识不合法。".to_string());
+    }
+    let name = validate_attachment_name(name)?;
+    let app_data = app_data_dir(app)?;
+    let cache_path = cached_attachment_path(&app_data, id, &name);
+    if cache_path.is_file() {
+        return Ok(cache_path);
+    }
+
+    let (sync_root, _) = resolve_sync_location(app)?;
+    let shared_path = shared_attachment_path(&sync_root, id);
+    let contents = fs::read(&shared_path).map_err(|_| "附件尚未同步到此设备，请稍后重试。".to_string())?;
+    if contents.len() > MAX_ATTACHMENT_BYTES {
+        return Err("附件超过 50 MB，无法读取。".to_string());
+    }
+    atomic_write(&cache_path, &contents)?;
+    Ok(cache_path)
+}
+
+fn live_attachment_entries(data: &Value) -> Vec<(String, String)> {
+    data.get("attachments")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|attachment| {
+            let id = attachment.get("id")?.as_str()?;
+            let name = attachment.get("name")?.as_str()?;
+            if valid_attachment_id(id) && validate_attachment_name(name).is_ok() {
+                Some((id.to_string(), name.to_string()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn deleted_attachment_ids(data: &Value) -> Vec<String> {
+    data.pointer("/deleted/attachments")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|items| items.keys())
+        .filter(|id| valid_attachment_id(id))
+        .cloned()
+        .collect()
+}
+
+fn reconcile_attachment_files(app_data: &Path, sync_root: &Path, data: &Value) -> Result<(), String> {
+    for (id, name) in live_attachment_entries(data) {
+        let local = cached_attachment_path(app_data, &id, &name);
+        let shared = shared_attachment_path(sync_root, &id);
+        if local.is_file() && !shared.is_file() {
+            let contents = fs::read(&local).map_err(|error| format!("无法读取附件缓存：{error}"))?;
+            atomic_write(&shared, &contents)?;
+        }
+    }
+
+    for id in deleted_attachment_ids(data) {
+        let local = attachment_cache_root(app_data).join(&id);
+        let shared = shared_attachment_path(sync_root, &id);
+        let staging = attachment_staging_path(app_data, &id);
+        if local.exists() {
+            fs::remove_dir_all(&local).map_err(|error| format!("无法清理本地附件：{error}"))?;
+        }
+        if shared.exists() {
+            fs::remove_file(&shared).map_err(|error| format!("无法清理同步附件：{error}"))?;
+        }
+        if staging.exists() {
+            fs::remove_file(&staging).map_err(|error| format!("无法清理附件暂存信息：{error}"))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn prepare_attachment(app: tauri::AppHandle, id: String, name: String, size: usize) -> Result<String, String> {
+    if !valid_attachment_id(&id) {
+        return Err("附件标识不合法。".to_string());
+    }
+    if size > MAX_ATTACHMENT_BYTES {
+        return Err("单个附件不能超过 50 MB。".to_string());
+    }
+    let name = validate_attachment_name(&name)?;
+    let app_data = app_data_dir(&app)?;
+    let pending = serde_json::to_vec(&PendingAttachment { name: name.clone(), size })
+        .map_err(|error| format!("无法准备附件：{error}"))?;
+    atomic_write(&attachment_staging_path(&app_data, &id), &pending)?;
+    Ok(name)
+}
+
+#[tauri::command]
+fn write_attachment(app: tauri::AppHandle, request: tauri::ipc::Request) -> Result<(), String> {
+    let id = request
+        .headers()
+        .get(ATTACHMENT_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| "缺少附件标识。".to_string())?;
+    if !valid_attachment_id(id) {
+        return Err("附件标识不合法。".to_string());
+    }
+    let tauri::ipc::InvokeBody::Raw(contents) = request.body() else {
+        return Err("附件必须使用二进制方式上传。".to_string());
+    };
+    let app_data = app_data_dir(&app)?;
+    let staging = attachment_staging_path(&app_data, id);
+    let pending: PendingAttachment = serde_json::from_slice(
+        &fs::read(&staging).map_err(|_| "附件暂存信息不存在，请重新添加。".to_string())?,
+    )
+    .map_err(|_| "附件暂存信息无效，请重新添加。".to_string())?;
+    if contents.len() != pending.size || contents.len() > MAX_ATTACHMENT_BYTES {
+        return Err("附件大小与预期不一致。".to_string());
+    }
+    let cache_path = cached_attachment_path(&app_data, id, &pending.name);
+    atomic_write(&cache_path, contents)?;
+    let (sync_root, _) = resolve_sync_location(&app)?;
+    atomic_write(&shared_attachment_path(&sync_root, id), contents)?;
+    fs::remove_file(staging).map_err(|error| format!("无法完成附件暂存：{error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn read_attachment(app: tauri::AppHandle, id: String, name: String) -> Result<tauri::ipc::Response, String> {
+    let path = ensure_cached_attachment(&app, &id, &name)?;
+    let contents = fs::read(path).map_err(|error| format!("无法读取附件：{error}"))?;
+    Ok(tauri::ipc::Response::new(contents))
+}
+
+#[tauri::command]
+fn open_attachment(app: tauri::AppHandle, id: String, name: String) -> Result<(), String> {
+    let path = ensure_cached_attachment(&app, &id, &name)?;
+    app.opener()
+        .open_path(path.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|error| format!("无法打开附件：{error}"))
+}
+
+#[tauri::command]
+fn attachment_availability(app: tauri::AppHandle, id: String, name: String) -> Result<String, String> {
+    if !valid_attachment_id(&id) {
+        return Err("附件标识不合法。".to_string());
+    }
+    let name = validate_attachment_name(&name)?;
+    let app_data = app_data_dir(&app)?;
+    let cached = cached_attachment_path(&app_data, &id, &name).is_file();
+    let (sync_root, status) = resolve_sync_location(&app)?;
+    if shared_attachment_path(&sync_root, &id).is_file() {
+        Ok(if status.is_available { "synced" } else { "local" }.to_string())
+    } else if cached {
+        Ok("local".to_string())
+    } else {
+        Ok("missing".to_string())
+    }
 }
 
 fn read_snapshot_values(sync_root: &Path, app_data: &Path) -> Vec<Value> {
@@ -243,6 +454,7 @@ fn save_workspace_snapshot(app: tauri::AppHandle, data: Value) -> Result<SyncSta
     let (sync_root, status) = resolve_sync_location(&app)?;
     let id = device_id(&app_data)?;
     atomic_write(&sync_root.join("devices").join(format!("{id}.json")), &contents)?;
+    reconcile_attachment_files(&app_data, &sync_root, &data)?;
 
     Ok(status_for(
         &sync_root,
@@ -274,10 +486,16 @@ fn set_sync_directory(app: tauri::AppHandle, directory: Option<String>) -> Resul
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             load_workspace_snapshots,
             save_workspace_snapshot,
-            set_sync_directory
+            set_sync_directory,
+            prepare_attachment,
+            write_attachment,
+            read_attachment,
+            open_attachment,
+            attachment_availability
         ])
         .run(tauri::generate_context!())
         .expect("error while running Flowdeck");
@@ -322,5 +540,42 @@ mod tests {
 
         fs::remove_dir_all(sync_root).unwrap();
         fs::remove_dir_all(app_data).unwrap();
+    }
+
+    #[test]
+    fn attachment_validation_rejects_unsafe_or_unsupported_names() {
+        assert!(valid_attachment_id("attachment-123-abc"));
+        assert!(!valid_attachment_id("../attachment-123"));
+        assert_eq!(validate_attachment_name("设计稿.PDF").unwrap(), "设计稿.PDF");
+        assert!(validate_attachment_name("../secret.pdf").is_err());
+        assert!(validate_attachment_name("script.svg").is_err());
+        assert!(validate_attachment_name("macro.xlsm").is_err());
+    }
+
+    #[test]
+    fn attachment_reconcile_copies_live_files_and_cleans_tombstones() {
+        let app_data = test_directory("attachment-local");
+        let sync_root = test_directory("attachment-sync");
+        let live_id = "attachment-live-1";
+        let deleted_id = "attachment-deleted-1";
+        let live_cache = cached_attachment_path(&app_data, live_id, "notes.pdf");
+        let deleted_cache = cached_attachment_path(&app_data, deleted_id, "old.txt");
+        atomic_write(&live_cache, b"live").unwrap();
+        atomic_write(&deleted_cache, b"deleted").unwrap();
+        atomic_write(&shared_attachment_path(&sync_root, deleted_id), b"deleted").unwrap();
+
+        let mut data = serde_json::json!({
+            "attachments": [{ "id": live_id, "name": "notes.pdf" }],
+            "deleted": { "attachments": {} }
+        });
+        data["deleted"]["attachments"][deleted_id] = Value::String("2026-11-16T00:00:00.000Z".to_string());
+        reconcile_attachment_files(&app_data, &sync_root, &data).unwrap();
+
+        assert_eq!(fs::read(shared_attachment_path(&sync_root, live_id)).unwrap(), b"live");
+        assert!(!attachment_cache_root(&app_data).join(deleted_id).exists());
+        assert!(!shared_attachment_path(&sync_root, deleted_id).exists());
+
+        fs::remove_dir_all(app_data).unwrap();
+        fs::remove_dir_all(sync_root).unwrap();
     }
 }
